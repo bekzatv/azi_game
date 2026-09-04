@@ -1,0 +1,7 @@
+{
+  "name": "Ази - Карточная игра",
+  "description": "Карточная игра Ази: козыри, плавная анимация раздачи, розыгрыш взяток в реальном времени, одиночная игра с ботами и игра онлайн с друзьями.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
