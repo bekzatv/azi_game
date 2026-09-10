@@ -16,6 +16,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -210,183 +212,73 @@ fun GameScreen(
         label = "pulse"
     )
 
+    androidx.activity.compose.BackHandler {
+        viewModel.leaveCurrentGame()
+        onNavigateBack()
+    }
+    if (gamePhase == GamePhase.WAITING_FOR_PLAYERS) {
+        RoomWaitingScreen(viewModel, onNavigateBack)
+        return
+    }
+    val transportError by viewModel.networkError.collectAsState()
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(KazakhNavyDark)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Top Navigation & Stake Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(KazakhNavy)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = {
-                            viewModel.leaveCurrentGame()
-                            onNavigateBack()
-                        },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("back_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Назад",
-                            tint = Color.White
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Column {
-                        Text(
-                            text = if (isOnlineMode) "Онлайн стол" else currentStake.name,
-                            color = KazakhGold,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = if (isOnlineMode) {
-                                when (networkStatus) {
-                                    NetworkConnectionStatus.CONNECTED -> "🟢 В сети"
-                                    NetworkConnectionStatus.CONNECTING -> "🟡 Подключение..."
-                                    NetworkConnectionStatus.ERROR -> "🔴 Ошибка сети"
-                                    NetworkConnectionStatus.DISCONNECTED -> "⚪ Отключено"
-                                }
-                            } else "Анте: ${currentStake.anteTenge}₸",
-                            color = if (isOnlineMode && networkStatus == NetworkConnectionStatus.CONNECTED) Color(0xFF81C784) else Color(0xFF90A4AE),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-
-                    // Online Room Code Badge (clickable to copy)
-                    if (isOnlineMode) {
-                        val currentRoomCode = roomCode ?: "AZI-777"
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(KazakhTurquoise.copy(alpha = 0.2f))
-                                .border(1.dp, KazakhTurquoise, RoundedCornerShape(8.dp))
-                                .clickable {
-                                    clipboardManager.setText(AnnotatedString(currentRoomCode))
-                                    showCopiedToast = true
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Скопировать код",
-                                tint = KazakhTurquoise,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = currentRoomCode,
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
+        if (maxWidth > maxHeight) LandscapeGameTable(
+            viewModel = viewModel,
+            onBack = { viewModel.leaveCurrentGame(); onNavigateBack() },
+            onMenu = { index ->
+                when (index) {
+                    0 -> showDeckDialog = true
+                    1 -> showLeaderboardSheet = true
+                    2 -> showRulesDialog = true
+                    3 -> showAboutAuthorDialog = true
+                    4 -> showChatSheet = true
                 }
-
-                // Top right actions
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    IconButton(
-                        onClick = { viewModel.toggleSound() },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("sound_toggle_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isSoundEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                            contentDescription = if (isSoundEnabled) "Звуки включены" else "Звуки выключены",
-                            tint = if (isSoundEnabled) KazakhGold else Color(0xFF90A4AE)
-                        )
+            }
+        ) else Column(modifier = Modifier.fillMaxSize()) {
+            if (isOnlineMode && transportError != null) Text(transportError.orEmpty(), color = Color(0xFFFFB5AB), modifier = Modifier.padding(12.dp))
+            // Compact 48dp actions leave room for names and the invitation code.
+            Row(Modifier.fillMaxWidth().background(KazakhNavy).padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { viewModel.leaveCurrentGame(); onNavigateBack() },
+                    modifier = Modifier.size(48.dp).testTag("back_button")) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "В лобби", tint = Color.White)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(if (isOnlineMode) "AZI · Друзья" else "AZI · Практика",
+                        color = KazakhGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(if(isOnlineMode) roomCode.orEmpty() else "Анте ${formatTenge(currentStake.anteTenge)}",
+                        color = Color(0xFFB0BED2), fontSize = 12.sp,
+                        modifier = Modifier.clickable(enabled = isOnlineMode) {
+                            clipboardManager.setText(AnnotatedString(roomCode.orEmpty()))
+                            showCopiedToast = true
+                        })
+                }
+                IconButton(onClick = { viewModel.toggleSound() },
+                    modifier = Modifier.size(48.dp).testTag("sound_toggle_button")) {
+                    Icon(if(isSoundEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                        "Переключить звук", tint = KazakhGold)
+                }
+                var menuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp).testTag("table_menu")) {
+                        Text("•••", color = KazakhGold, fontSize = 20.sp)
                     }
-
-                    IconButton(
-                        onClick = { showDeckDialog = true },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("deck_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Style,
-                            contentDescription = "Колода",
-                            tint = KazakhGold
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { showLeaderboardSheet = true },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("leaderboard_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Leaderboard,
-                            contentDescription = "Рейтинг",
-                            tint = KazakhGold
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { showRulesDialog = true },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.HelpOutline,
-                            contentDescription = "Правила",
-                            tint = Color(0xFFB0BEC5)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { showAboutAuthorDialog = true },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("about_author_game_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Об авторе",
-                            tint = KazakhGold
-                        )
-                    }
-
-                    // Chat Button with badge
-                    Box {
-                        IconButton(
-                            onClick = { showChatSheet = true },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("chat_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Chat,
-                                contentDescription = "Чат",
-                                tint = KazakhTurquoise
-                            )
-                        }
-                        if (chatMessages.isNotEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(KazakhCrimson)
-                                    .align(Alignment.TopEnd)
-                            )
+                    androidx.compose.material3.DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        listOf("Рубашки карт", "Мой рейтинг", "Правила игры", "Об авторе", "Чат").forEachIndexed { index, label ->
+                            androidx.compose.material3.DropdownMenuItem(text = { Text(label) }, onClick = {
+                                menuOpen = false
+                                when(index) {
+                                    0 -> showDeckDialog = true
+                                    1 -> showLeaderboardSheet = true
+                                    2 -> showRulesDialog = true
+                                    3 -> showAboutAuthorDialog = true
+                                    4 -> showChatSheet = true
+                                }
+                            })
                         }
                     }
                 }
@@ -408,43 +300,27 @@ fun GameScreen(
                         Brush.radialGradient(
                             colors = listOf(
                                 TableFeltGreen,
-                                Color(0xFF072C23),
+                                Color(0xFF192E48),
                                 TableFeltDark
                             )
                         )
                     )
             ) {
-                // Opponents area (Top Row: Bot 1 and Bot 2)
+                TableEngraving(Modifier.fillMaxSize())
+                Column(Modifier.fillMaxSize().padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 val opponents = players.filter { !it.isUser }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .padding(top = 6.dp, start = 8.dp, end = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    opponents.forEach { bot ->
-                        val isTurn = players.getOrNull(currentTurnIndex)?.id == bot.id
-                        val isSpeaking = speakingPlayers.contains(bot.id)
+                OpponentGrid(opponents, players.getOrNull(currentTurnIndex)?.id, turnTimer)
 
-                        PlayerSeatView(
-                            player = bot,
-                            isCurrentTurn = isTurn,
-                            isSpeaking = isSpeaking,
-                            showCardsFaceUp = gamePhase == GamePhase.SHOWDOWN || gamePhase == GamePhase.WINNER_CELEBRATION,
-                            deckTheme = selectedDeck,
-                            turnSeconds = if (isTurn) turnTimer else 0,
-                            trumpSuit = trumpSuit
-                        )
-                    }
-                }
-
+                if (players.size >= 4) {
+                    CompactTableCenter(viewModel, Modifier.weight(1f).fillMaxWidth())
+                } else {
                 // Center Table Area: Trump Card + Pot + Trick Area / Action Banner
                 Column(
                     modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                        .padding(horizontal = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
                     // Trump Display Indicator & Pot in a neat row
                     Row(
@@ -577,207 +453,6 @@ fun GameScreen(
                         }
                     }
 
-                    // Online Mode: Waiting for Players mode in center of table
-                    if (gamePhase == GamePhase.WAITING_FOR_PLAYERS) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth(0.95f)
-                                .shadow(14.dp, RoundedCornerShape(18.dp)),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = KazakhNavyDark.copy(alpha = 0.96f)),
-                            border = androidx.compose.foundation.BorderStroke(2.dp, KazakhGold)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "ОЖИДАНИЕ ДРУЗЕЙ 👥",
-                                    color = KazakhGold,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // Код комнаты с копированием
-                                val activeRoomCode = roomCode ?: "AZI-777"
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(KazakhNavy)
-                                        .border(1.5.dp, KazakhTurquoise, RoundedCornerShape(10.dp))
-                                        .clickable {
-                                            clipboardManager.setText(AnnotatedString(activeRoomCode))
-                                            showCopiedToast = true
-                                        }
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("КОД КОМНАТЫ (НАЖМИТЕ ДЛЯ КОПИРОВАНИЯ)", color = Color(0xFFB0BEC5), fontSize = 9.sp)
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = activeRoomCode,
-                                                color = Color.White,
-                                                fontSize = 20.sp,
-                                                fontWeight = FontWeight.Black,
-                                                letterSpacing = 2.sp
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Скопировать",
-                                            tint = KazakhTurquoise,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-
-                                if (showCopiedToast) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "✓ Код $activeRoomCode скопирован!",
-                                        color = Color(0xFF81C784),
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Text(
-                                    text = "Игроков за столом: ${players.size} из $maxRoomPlayers",
-                                    color = KazakhTurquoise,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                // List of joined players
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    players.forEach { p ->
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .clip(CircleShape)
-                                                    .background(Color(p.avatarBgColor))
-                                                    .border(1.5.dp, if (p.isUser) KazakhGold else KazakhTurquoise, CircleShape),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(p.avatarEmoji, fontSize = 16.sp)
-                                            }
-                                            Text(
-                                                text = if (p.isUser) "${p.name} (Вы)" else p.name,
-                                                color = Color.White,
-                                                fontSize = 9.5.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
-
-                                val (statusText, statusColor) = when (networkStatus) {
-                                    NetworkConnectionStatus.CONNECTED -> "🟢 Связь установлена (Онлайн)" to Color(0xFF81C784)
-                                    NetworkConnectionStatus.CONNECTING -> "🟡 Подключение к комнате..." to KazakhGold
-                                    NetworkConnectionStatus.ERROR -> "🔴 Ошибка связи (Повтор...)" to KazakhCrimson
-                                    NetworkConnectionStatus.DISCONNECTED -> "⚪ Отключено" to Color.Gray
-                                }
-                                Text(
-                                    text = statusText,
-                                    color = statusColor,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // Инструкция подключения
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFF1A2634))
-                                        .padding(8.dp)
-                                ) {
-                                    Text(
-                                        text = "📱 Чтобы друг присоединился: пусть нажмет «Войти по коду» в лобби и введет код $activeRoomCode",
-                                        color = Color(0xFFECEFF1),
-                                        fontSize = 10.5.sp,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (isRoomHost) {
-                                        OutlinedButton(
-                                            onClick = { showAddFriendDialog = true },
-                                            modifier = Modifier.weight(1f),
-                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KazakhTurquoise),
-                                            border = androidx.compose.foundation.BorderStroke(1.dp, KazakhTurquoise),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(15.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("+ Игрок/Бот", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                        }
-
-                                        Button(
-                                            onClick = { viewModel.startOnlineGameFromWaitingRoom() },
-                                            modifier = Modifier.weight(1.3f),
-                                            enabled = players.size >= 2,
-                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = KazakhGold,
-                                                disabledContainerColor = Color(0xFF455A64)
-                                            ),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Text(
-                                                text = if (players.size >= maxRoomPlayers) "Все в сборе! Начать" else if (players.size >= 2) "Начать игру" else "Ждем игроков...",
-                                                color = if (players.size >= 2) KazakhNavyDark else Color(0xFF90A4AE),
-                                                fontWeight = FontWeight.Black,
-                                                fontSize = 11.5.sp,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    } else {
-                                        // Guest mode
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(KazakhNavy)
-                                                .border(1.dp, KazakhTurquoise, RoundedCornerShape(10.dp))
-                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = "⏳ Ожидание начала от создателя комнаты...",
-                                                color = KazakhGold,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 11.5.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     // Trick-Taking Center Play Area: Display cards played in the current trick!
                     if (gamePhase == GamePhase.PLAYING_TRICKS || gamePhase == GamePhase.TRICK_RESULT) {
                         Column(
@@ -889,11 +564,12 @@ fun GameScreen(
                     }
                 }
 
+                }
+
                 // User Hand Area (Bottom)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
                         .padding(bottom = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -992,6 +668,9 @@ fun GameScreen(
                         }
                         Text(
                             text = user.name,
+                            modifier = Modifier.weight(1f, fill = false),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -1020,26 +699,15 @@ fun GameScreen(
                         }
                     }
                 }
+                }
             }
 
-            // Real-Time Voice Chat Bar
-            VoiceChatControlBar(
-                isMicEnabled = isMicEnabled,
-                isSpeakerEnabled = isSpeakerEnabled,
-                isUserSpeaking = isUserSpeaking,
-                audioAmplitude = audioAmplitude,
-                onToggleMic = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        viewModel.voiceChatManager.toggleMic()
-                    } else {
-                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                },
-                onToggleSpeaker = { viewModel.voiceChatManager.toggleSpeaker() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 3.dp)
-            )
+            if (isOnlineMode) {
+                TextButton(onClick = { showChatSheet = true },
+                    modifier = Modifier.fillMaxWidth().testTag("chat_button")) {
+                    Text("Чат с друзьями · быстрые фразы", color = KazakhTurquoise)
+                }
+            }
 
             // User Betting Action Controls Bar (shown when gamePhase == BETTING)
             val isUserBettingTurn = isUserTurn && gamePhase == GamePhase.BETTING && !user.hasFolded
@@ -1084,14 +752,20 @@ fun GameScreen(
                     ) {
                         val chipAmounts = listOf(500L, 1000L, 2000L, 5000L, 10000L)
                         chipAmounts.forEach { amount ->
-                            TengeChip(
+                            if (players.size >= 4) TextButton(
+                                onClick = { selectedRaiseChip = amount },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(0.dp),
+                                colors = ButtonDefaults.textButtonColors(
+                                    containerColor = if (selectedRaiseChip == amount) KazakhGold else Color.Transparent,
+                                    contentColor = if (selectedRaiseChip == amount) KazakhNavyDark else KazakhGold)
+                            ) {
+                                Text(if (amount < 1000L) "$amount" else "${amount / 1000}k",
+                                    fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
+                            } else TengeChip(
                                 amount = amount,
                                 onClick = {
-                                    if (selectedRaiseChip == amount) {
-                                        viewModel.onUserAction(BetActionType.RAISE, amount)
-                                    } else {
-                                        selectedRaiseChip = amount
-                                    }
+                                    selectedRaiseChip = amount
                                 },
                                 isSelected = selectedRaiseChip == amount
                             )
@@ -1100,7 +774,7 @@ fun GameScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Action Buttons Row: Пас, Чек / Колл, Поднять, Вскрыть / К взяткам
+                    // Betting actions and the final response that starts trick play.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -1188,13 +862,14 @@ fun GameScreen(
                             }
                         }
 
-                        // SHOWDOWN (Вскрыть / К взяткам)
+                        // Final call only: every other active player has answered the latest bet.
                         Button(
                             onClick = { viewModel.onUserAction(BetActionType.SHOWDOWN) },
+                            enabled = viewModel.canStartTricksAfterUserCall() && (!isOnlineMode || networkStatus == NetworkConnectionStatus.CONNECTED),
                             modifier = Modifier
                                 .weight(1.2f)
                                 .height(50.dp)
-                                .testTag("showdown_button"),
+                                .testTag("start_tricks_button"),
                             contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD4AF37)),
                             shape = RoundedCornerShape(10.dp)
@@ -1204,15 +879,14 @@ fun GameScreen(
                                 verticalArrangement = Arrangement.Center
                             ) {
                                 Text(
-                                    text = "Вскрыть",
+                                    text = "Начать",
                                     fontWeight = FontWeight.Black,
-                                    color = KazakhNavyDark,
                                     fontSize = 11.5.sp,
                                     maxLines = 1
                                 )
                                 Text(
-                                    text = "К взяткам",
-                                    color = KazakhNavyDark.copy(alpha = 0.85f),
+                                    text = "розыгрыш",
+                                    color = androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.85f),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1
@@ -1506,11 +1180,11 @@ fun AziRulesDialog(onDismiss: () -> Unit) {
                 Text(
                     text = "1. Колода: 28 карт (от 8 до Туза).\n" +
                             "2. Раздача: Каждому игроку раздается по 3 карты, открывается козырь.\n" +
-                            "3. Торговля: Игроки делают ставки (Пас, Чек, Поднять или К взяткам).\n" +
-                            "4. Розыгрыш взяток: Игроки по очереди ходят одной картой. Обязательно ходить в масть первого хода! Если масти нет — бьют козырем либо сбрасывают.\n" +
+                            "3. Торговля: Пас, Чек / Уравнять или Поднять. После ответа всех оставшихся игроков и уравнивания ставок розыгрыш начинается автоматически. «Начать розыгрыш» — завершающее уравнивание, без пропуска чужого хода.\n" +
+                            "4. Розыгрыш взяток: Первым ходит игрок, чью ставку не перебили; без повышения — первый оставшийся игрок. Далее игроки по очереди ходят одной картой. Обязательно ходить в масть первого хода! Если масти нет — бьют козырем либо сбрасывают.\n" +
                             "5. Кто забирает взятку: Игрок, положивший старшую карту масти хода, либо старший козырь.\n" +
                             "6. Победа: Кто берет 2 или 3 взятки — забирает весь банк!\n" +
-                            "7. Свара: Если все взяли по 1 взятке (ничья), объявляется Свара! Банк остается на кону и разыгрывается в следующей сдаче.",
+                            "7. АЗИ: Если трое игроков взяли по одной взятке и никто не взял две, объявляется АЗИ! Банк остаётся на кону для следующего розыгрыша.",
                     color = Color.White,
                     fontSize = 12.sp,
                     lineHeight = 17.sp

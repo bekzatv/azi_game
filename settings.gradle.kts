@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "Azi"
 
 include(":app")
+

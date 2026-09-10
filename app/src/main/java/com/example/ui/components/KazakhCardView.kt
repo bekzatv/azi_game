@@ -130,8 +130,8 @@ fun CardFront(
     val shape = RoundedCornerShape(if (isCompact) 6.dp else 8.dp)
     val paddingDp = if (isCompact) 2.5.dp else 4.dp
 
-    val rankFontSize = if (isCompact) 11.5.sp else 15.sp
-    val suitFontSize = if (isCompact) 10.5.sp else 14.sp
+    val rankFontSize = if (isCompact) 12.sp else 18.sp
+    val suitFontSize = if (isCompact) 11.sp else 16.sp
 
     Box(
         modifier = Modifier
@@ -211,7 +211,7 @@ fun CardFront(
                     }
                     Rank.KING -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = "👑", fontSize = 18.sp)
+                            CourtEmblem(Rank.KING, suitColor)
                             Text(
                                 text = "КОРОЛЬ",
                                 color = suitColor,
@@ -222,7 +222,7 @@ fun CardFront(
                     }
                     Rank.QUEEN -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = "👸", fontSize = 18.sp)
+                            CourtEmblem(Rank.QUEEN, suitColor)
                             Text(
                                 text = "ДАМА",
                                 color = suitColor,
@@ -233,7 +233,7 @@ fun CardFront(
                     }
                     Rank.JACK -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = "⚔️", fontSize = 18.sp)
+                            CourtEmblem(Rank.JACK, suitColor)
                             Text(
                                 text = "ВАЛЕТ",
                                 color = suitColor,
@@ -284,6 +284,15 @@ fun CardBack(
     deckTheme: DeckTheme
 ) {
     val shape = RoundedCornerShape(8.dp)
+    if (deckTheme.artworkRes != null) {
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(deckTheme.artworkRes),
+            contentDescription = "Рубашка: ${deckTheme.name}",
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().clip(shape)
+        )
+        return
+    }
 
     Box(
         modifier = Modifier
@@ -831,4 +840,32 @@ private fun DrawScope.drawObsidianAceCardBack(w: Float, h: Float, cx: Float, cy:
         cubicTo(cx - 12f, spadeCenterY + 4f, cx - 8f, spadeCenterY - 6f, cx, spadeCenterY - spadeH * 0.3f)
     }
     drawPath(innerFlourish, color = black, style = Stroke(width = 1.3f))
+}
+
+/** Small vector court marks stay crisp at every screen density. */
+@Composable
+private fun CourtEmblem(rank: Rank, ink: Color) {
+    Canvas(Modifier.size(28.dp)) {
+        val w = size.width
+        val h = size.height
+        val gold = Color(0xFFAE884B)
+        val line = 1.25.dp.toPx()
+        if (rank == Rank.JACK) {
+            drawLine(gold, Offset(w * .2f, h * .18f), Offset(w * .8f, h * .82f), line * 2)
+            drawLine(ink, Offset(w * .8f, h * .18f), Offset(w * .2f, h * .82f), line * 2)
+            drawCircle(gold, w * .09f, Offset(w * .5f, h * .5f))
+        } else {
+            val crown = androidx.compose.ui.graphics.Path().apply {
+                moveTo(w * .12f, h * .32f); lineTo(w * .3f, h * .49f)
+                lineTo(w * .5f, h * .15f); lineTo(w * .7f, h * .49f)
+                lineTo(w * .88f, h * .32f); lineTo(w * .78f, h * .76f)
+                lineTo(w * .22f, h * .76f); close()
+            }
+            drawPath(crown, gold.copy(alpha = .16f))
+            drawPath(crown, gold, style = Stroke(line))
+            drawLine(gold, Offset(w * .22f, h * .88f), Offset(w * .78f, h * .88f), line)
+            drawCircle(ink, if(rank == Rank.QUEEN) w * .07f else w * .045f,
+                Offset(w * .5f, h * .56f))
+        }
+    }
 }

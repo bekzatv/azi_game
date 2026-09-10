@@ -23,10 +23,31 @@ data class DeckTheme(
     val ornamentColor: Color,
     val pattern: OrnamentPattern,
     val priceTenge: Long = 0L,
+    val artworkRes: Int? = null,
     val isUnlocked: Boolean = true
 )
 
 object AvailableDecks {
+    val SHANYRAK_NOIR = DeckTheme(
+        id = "shanyrak_noir", name = "Шаңырақ • Ночь",
+        description = "Золотая гравировка и бирюза на глубоком индиго",
+        primaryColor = Color(0xFF101B32), secondaryColor = Color(0xFF203653),
+        ornamentColor = Color(0xFFDEC28A), pattern = OrnamentPattern.SHANYRAQ,
+        artworkRes = com.example.R.drawable.deck_shanyrak
+    )
+    val STEPPE_SILVER = DeckTheme(
+        id = "steppe_silver", name = "Дала • Серебро",
+        description = "Серебряная геометрия и оберег степи",
+        primaryColor = Color(0xFF183F49), secondaryColor = Color(0xFF0B202C),
+        ornamentColor = Color(0xFFD7EBEF), pattern = OrnamentPattern.TUMAR
+    )
+    val SILK_SUNSET = DeckTheme(
+        id = "silk_sunset", name = "Жібек • Закат",
+        description = "Тёплое золото на гранатовом шёлке",
+        primaryColor = Color(0xFF592C43), secondaryColor = Color(0xFF24172E),
+        ornamentColor = Color(0xFFF1CCAA), pattern = OrnamentPattern.SYRGHA
+    )
+
     val ALTYN_ORDA = DeckTheme(
         id = "altyn_orda",
         name = "Золотая Орда",
@@ -136,6 +157,7 @@ object AvailableDecks {
     )
 
     val allDecks = listOf(
+        SHANYRAK_NOIR, STEPPE_SILVER, SILK_SUNSET,
         AZURE_ORNAMENT,
         BICYCLE_RED,
         VIOLET_MANDALA,

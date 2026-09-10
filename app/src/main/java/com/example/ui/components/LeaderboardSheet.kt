@@ -381,3 +381,4 @@ fun LeaderboardRow(entry: LeaderboardEntry) {
         }
     }
 }
+

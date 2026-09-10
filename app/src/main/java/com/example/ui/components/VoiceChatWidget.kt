@@ -173,3 +173,4 @@ fun SpeakingPulseEffect(
             .border(2.dp, pulseColor.copy(alpha = alpha), CircleShape)
     )
 }
+

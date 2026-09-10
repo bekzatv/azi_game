@@ -35,7 +35,7 @@ enum class NetworkConnectionStatus {
 
 sealed class OnlineGameEvent {
     data class PlayerJoined(val player: Player) : OnlineGameEvent()
-    data class SyncRoom(val stakeId: String, val players: List<Player>) : OnlineGameEvent()
+    data class SyncRoom(val stakeId: String, val players: List<Player>, val maxPlayers: Int = 3, val excludedSuit: Suit = Suit.SPADES, val readyIds: Set<String> = emptySet()) : OnlineGameEvent()
     data class GameStarted(
         val trumpCard: Card,
         val hands: Map<String, List<Card>>,
@@ -47,6 +47,8 @@ sealed class OnlineGameEvent {
     data class BetAction(val playerId: String, val actionType: String, val amount: Long) : OnlineGameEvent()
     data class CardPlayed(val playerId: String, val card: Card) : OnlineGameEvent()
     data class ChatReceived(val senderId: String, val senderName: String, val text: String) : OnlineGameEvent()
+    data class RoomRejected(val playerId: String, val reason: String) : OnlineGameEvent()
+    data class ReadyChanged(val playerId: String, val ready: Boolean) : OnlineGameEvent()
     data class PlayerLeft(val playerId: String) : OnlineGameEvent()
     data class NextRound(val roundNumber: Int) : OnlineGameEvent()
 }
@@ -56,13 +58,38 @@ sealed class OnlineGameEvent {
  * Allows multiple physical Android devices anywhere in the world to connect by room code (e.g. AZI-777).
  */
 class OnlineMultiplayerManager(
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val serverUrl: String = "https://ntfy.sh"
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // For persistent WebSocket
         .writeTimeout(10, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
+
+    private val publishClient by lazy { client.newBuilder().readTimeout(15, TimeUnit.SECONDS).build() }
+    @Volatile private var generation = 0L
+    private var connectionCallback: (() -> Unit)? = null
+    private var connectedOnce = false
+    @Volatile private var cursor = ""
+    private val publishMutex = kotlinx.coroutines.sync.Mutex()
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _deliveryFailed = MutableStateFlow(false)
+    val deliveryFailed: StateFlow<Boolean> = _deliveryFailed.asStateFlow()
+
+    private fun markConnected(token: Long) {
+        scope.launch(Dispatchers.Main) {
+            if (token != generation) return@launch
+            _status.value = NetworkConnectionStatus.CONNECTED
+            if (!_deliveryFailed.value) _errorMessage.value = null
+            if (!connectedOnce) {
+                connectedOnce = true
+                connectionCallback?.invoke()
+            }
+        }
+    }
 
     private var currentWebSocket: WebSocket? = null
     private var pollingJob: Job? = null
@@ -83,78 +110,78 @@ class OnlineMultiplayerManager(
     fun connectToRoom(rawRoomCode: String, onConnected: (() -> Unit)? = null) {
         disconnect()
 
-        val cleanTopic = "azi_game_" + rawRoomCode.trim().uppercase().replace("-", "_").replace("[^A-Z0-9_]".toRegex(), "")
-        currentRoomTopic = cleanTopic
+        val code = RoomCode.normalize(rawRoomCode)
+        if (code == null) {
+            _errorMessage.value = "Проверьте код приглашения"
+            _status.value = NetworkConnectionStatus.ERROR
+            return
+        }
+        val topic = "azi_v4_" + code.replace("-", "_")
+        currentRoomTopic = topic
+        val token = generation
+        cursor = (System.currentTimeMillis() / 1000).toString()
+        connectionCallback = onConnected
+        connectedOnce = false
+        _errorMessage.value = null
+        _deliveryFailed.value = false
         _status.value = NetworkConnectionStatus.CONNECTING
-
-        val wsUrl = "wss://ntfy.sh/$cleanTopic/ws"
-        val request = Request.Builder().url(wsUrl).build()
-
-        currentWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val wsUrl = serverUrl.replace("https://", "wss://").replace("http://", "ws://") + "/$topic/ws"
+        currentWebSocket = client.newWebSocket(Request.Builder().url(wsUrl).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("OnlineAzi", "WebSocket connected to $cleanTopic")
-                _status.value = NetworkConnectionStatus.CONNECTED
-                _lastPingTimeMs.value = System.currentTimeMillis()
-                scope.launch(Dispatchers.Main) {
-                    onConnected?.invoke()
-                }
+                if (token != generation) webSocket.close(1000, "Old session")
             }
-
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (token != generation) return
                 _lastPingTimeMs.value = System.currentTimeMillis()
-                handleIncomingRawMessage(text)
+                markConnected(token)
+                handleIncomingRawMessage(text, token)
             }
-
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w("OnlineAzi", "WebSocket failed: ${t.message}. Starting fallback polling.", t)
-                _status.value = NetworkConnectionStatus.ERROR
-                startFallbackPolling(cleanTopic)
+                if (token == generation) startFallbackPolling(topic, token)
             }
-
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d("OnlineAzi", "WebSocket closed: $reason")
-                _status.value = NetworkConnectionStatus.DISCONNECTED
+                if (token == generation) startFallbackPolling(topic, token)
             }
         })
     }
 
-    /**
-     * Fallback JSON stream / polling in case the network blocks WebSockets.
-     */
-    private fun startFallbackPolling(cleanTopic: String) {
-        pollingJob?.cancel()
-        pollingJob = scope.launch(Dispatchers.IO) {
-            _status.value = NetworkConnectionStatus.CONNECTING
-            while (isActive && currentRoomTopic == cleanTopic) {
-                try {
-                    val pollUrl = "https://ntfy.sh/$cleanTopic/json?poll=1&since=15s"
-                    val request = Request.Builder().url(pollUrl).build()
-                    val response = client.newCall(request).execute()
-                    if (response.isSuccessful) {
-                        _status.value = NetworkConnectionStatus.CONNECTED
-                        val bodyString = response.body?.string().orEmpty()
-                        bodyString.lineSequence().forEach { line ->
-                            if (line.isNotBlank()) {
-                                handleIncomingRawMessage(line)
-                            }
+    private fun startFallbackPolling(topic: String, token: Long) {
+        synchronized(this) {
+            if (pollingJob?.isActive == true || token != generation) return
+            pollingJob = scope.launch(Dispatchers.IO) {
+                var failures = 0
+                while (isActive && token == generation) {
+                    try {
+                        val request = Request.Builder().url("$serverUrl/$topic/json?poll=1&since=$cursor").build()
+                        publishClient.newCall(request).execute().use { response ->
+                            check(response.isSuccessful) { "HTTP ${response.code}" }
+                            val lines = response.body?.string().orEmpty()
+                            markConnected(token)
+                            lines.lineSequence().filter { it.isNotBlank() }.forEach { handleIncomingRawMessage(it, token) }
                         }
+                        failures = 0
+                    } catch (e: Exception) {
+                        if (token != generation) return@launch
+                        failures++
+                        _status.value = NetworkConnectionStatus.ERROR
+                        _errorMessage.value = "Нет связи. Повторяем подключение…"
                     }
-                } catch (e: Exception) {
-                    Log.w("OnlineAzi", "Polling error: ${e.message}")
+                    delay(if (failures == 0) 1500L else (1500L * failures).coerceAtMost(15000L))
                 }
-                delay(1500)
             }
         }
     }
 
-    private fun handleIncomingRawMessage(rawText: String) {
+    internal fun handleIncomingRawMessage(rawText: String, token: Long = generation) {
         try {
+            if (token != generation) return
             val ntfyObj = JSONObject(rawText)
             val eventType = ntfyObj.optString("event")
             if (eventType == "keepalive" || eventType == "open") {
                 return
             }
 
+            ntfyObj.optString("id").takeIf { it.isNotBlank() }?.let { cursor = it }
             val innerMsg = ntfyObj.optString("message")
             if (innerMsg.isBlank()) return
 
@@ -170,7 +197,11 @@ class OnlineMultiplayerManager(
             val data = payload.optJSONObject("data") ?: JSONObject()
 
             scope.launch(Dispatchers.Main) {
+                if (token != generation) return@launch
+                try {
                 when (type) {
+                    "ROOM_REJECTED" -> onEventReceived?.invoke(OnlineGameEvent.RoomRejected(data.getString("playerId"), data.getString("reason")))
+                    "READY" -> onEventReceived?.invoke(OnlineGameEvent.ReadyChanged(data.getString("playerId"), data.optBoolean("ready")))
                     "PLAYER_JOIN" -> {
                         val player = parsePlayer(data.getJSONObject("player"))
                         onEventReceived?.invoke(OnlineGameEvent.PlayerJoined(player))
@@ -181,7 +212,7 @@ class OnlineMultiplayerManager(
                         val players = (0 until playersArray.length()).map { i ->
                             parsePlayer(playersArray.getJSONObject(i))
                         }
-                        onEventReceived?.invoke(OnlineGameEvent.SyncRoom(stakeId, players))
+                        onEventReceived?.invoke(OnlineGameEvent.SyncRoom(stakeId, players, data.optInt("maxPlayers", 3).coerceIn(2,6), Suit.valueOf(data.optString("excludedSuit", "SPADES")), data.optJSONArray("readyIds")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet()))
                     }
                     "GAME_STARTED" -> {
                         val trump = parseCard(data.getJSONObject("trumpCard"))
@@ -230,6 +261,7 @@ class OnlineMultiplayerManager(
                         onEventReceived?.invoke(OnlineGameEvent.PlayerLeft(pId))
                     }
                 }
+                } catch (e: Exception) { Log.w("OnlineAzi", "Invalid event ignored", e) }
             }
         } catch (e: Exception) {
             Log.e("OnlineAzi", "Error parsing incoming online message: ${e.message}", e)
@@ -241,33 +273,37 @@ class OnlineMultiplayerManager(
      */
     fun broadcast(type: String, dataBuilder: JSONObject.() -> Unit) {
         val topic = currentRoomTopic ?: return
-        scope.launch(Dispatchers.IO) {
+        val token = generation
+        // Snapshot data on the caller thread; preserve invocation order with Main + FIFO mutex.
+        val wrapper = JSONObject().apply {
+            put("type", type)
+            put("senderDeviceId", localDeviceId)
+            put("msgId", UUID.randomUUID().toString())
+            put("timestamp", System.currentTimeMillis())
+            put("data", JSONObject().apply(dataBuilder))
+        }.toString()
+        scope.launch(Dispatchers.Main) {
+            publishMutex.lock()
             try {
-                val dataObj = JSONObject().apply(dataBuilder)
-                val wrapper = JSONObject().apply {
-                    put("type", type)
-                    put("senderDeviceId", localDeviceId)
-                    put("msgId", UUID.randomUUID().toString())
-                    put("timestamp", System.currentTimeMillis())
-                    put("data", dataObj)
-                }
-
-                val postUrl = "https://ntfy.sh/$topic"
-                val requestBody = wrapper.toString().toRequestBody("text/plain; charset=utf-8".toMediaType())
-                val request = Request.Builder()
-                    .url(postUrl)
-                    .post(requestBody)
-                    .header("Title", "Azi Move")
-                    .build()
-
-                client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        Log.w("OnlineAzi", "Broadcast $type failed with HTTP ${resp.code}")
+                if (type != "PLAYER_LEFT" && token != generation) return@launch
+                var delivered = false
+                for (attempt in 0..2) {
+                    if (type != "PLAYER_LEFT" && token != generation) return@launch
+                    delivered = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        try {
+                            val request = Request.Builder().url("$serverUrl/$topic")
+                                .post(wrapper.toRequestBody("text/plain; charset=utf-8".toMediaType())).build()
+                            publishClient.newCall(request).execute().use { it.isSuccessful }
+                        } catch (_: Exception) { false }
                     }
+                    if (delivered) break
+                    delay(750L * (attempt + 1))
                 }
-            } catch (e: Exception) {
-                Log.e("OnlineAzi", "Failed to broadcast $type: ${e.message}", e)
-            }
+                if (!delivered && token == generation) {
+                    _deliveryFailed.value = true
+                    _errorMessage.value = "Сообщение не доставлено. Вернитесь в комнату перед новой партией."
+                }
+            } finally { publishMutex.unlock() }
         }
     }
 
@@ -317,6 +353,10 @@ class OnlineMultiplayerManager(
     }
 
     fun disconnect() {
+        generation++
+        connectionCallback = null
+        connectedOnce = false
+        seenMessageIds.clear()
         pollingJob?.cancel()
         pollingJob = null
         try {

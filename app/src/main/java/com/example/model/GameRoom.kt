@@ -69,3 +69,4 @@ data class OnlineTableInfo(
     val roomCode: String = "AZI-${(100..999).random()}"
 )
 
+

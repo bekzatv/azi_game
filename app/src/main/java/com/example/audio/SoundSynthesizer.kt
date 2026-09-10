@@ -243,3 +243,4 @@ object SoundSynthesizer {
         })
     }
 }
+

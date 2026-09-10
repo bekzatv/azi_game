@@ -20,3 +20,4 @@ class ExampleInstrumentedTest {
     assertEquals(BuildConfig.APPLICATION_ID, appContext.packageName)
   }
 }
+

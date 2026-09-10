@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.kazakhazi.wrtz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 7
+    versionName = "1.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -46,7 +46,9 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      signingConfig = signingConfigs.getByName(if (rootProject.file("debug.keystore").exists()) "debugConfig" else "debug")
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

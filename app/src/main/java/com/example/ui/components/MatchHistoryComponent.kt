@@ -538,3 +538,4 @@ private fun formatTengeCompact(amount: Long): String {
         else -> "$amount"
     }
 }
+

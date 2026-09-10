@@ -74,7 +74,7 @@ fun PotView(
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
                 Text(
-                    text = "⚡ СВАРА! ҚОР САҚТАЛДЫ",
+                    text = "АЗИ! БАНК СОХРАНЁН",
                     color = Color.White,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Black

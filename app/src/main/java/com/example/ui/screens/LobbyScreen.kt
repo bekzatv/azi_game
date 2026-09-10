@@ -85,643 +85,127 @@ import com.example.viewmodel.AziGameViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LobbyScreen(
-    viewModel: AziGameViewModel,
-    onStartGame: () -> Unit
-) {
-    val userPlayer by viewModel.userPlayer.collectAsState()
-    val matchHistory by viewModel.matchHistory.collectAsState()
-    val selectedDeck by viewModel.selectedDeck.collectAsState()
-    val availableDecks by viewModel.availableDecks.collectAsState()
-    val leaderboard by viewModel.leaderboard.collectAsState()
-    val excludedSuit by viewModel.excludedSuit.collectAsState()
-
-    var showDeckDialog by remember { mutableStateOf(false) }
-    var showLeaderboardSheet by remember { mutableStateOf(false) }
-    var showProfileDialog by remember { mutableStateOf(false) }
-    var showCreateRoomDialog by remember { mutableStateOf(false) }
-    var showJoinCodeDialog by remember { mutableStateOf(false) }
-    var showEditNameDialog by remember { mutableStateOf(false) }
-    var showSuitSelectDialog by remember { mutableStateOf(false) }
-    var showAboutAuthorDialog by remember { mutableStateOf(false) }
-
-    var selectedBotCount by remember { mutableIntStateOf(2) }
-    var selectedBotStake by remember { mutableStateOf(StandardStakes.STAKE_500) }
-
-    val leaderboardSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(KazakhNavyDark)
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Top Bar: Brand, Balance & Daily Bonus
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(KazakhNavy, KazakhTurquoiseDark, KazakhNavyDark)
-                    )
-                )
-                .border(1.dp, KazakhGold.copy(alpha = 0.35f), RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-        ) {
+fun LobbyScreen(viewModel: AziGameViewModel, onStartGame: () -> Unit) {
+    val user by viewModel.userPlayer.collectAsState()
+    val deck by viewModel.selectedDeck.collectAsState()
+    val decks by viewModel.availableDecks.collectAsState()
+    val excluded by viewModel.excludedSuit.collectAsState()
+    val history by viewModel.matchHistory.collectAsState()
+    var dialog by remember { mutableStateOf("") }
+    var bots by remember { mutableIntStateOf(2) }
+    Column(Modifier.fillMaxSize().background(KazakhNavyDark)
+        .verticalScroll(rememberScrollState()).padding(22.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // App title
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🃏", fontSize = 28.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "АЗИ",
-                                color = KazakhGold,
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = 1.5.sp
-                            )
-                            Text(
-                                text = "Карточная игра",
-                                color = Color(0xFFCFD8DC),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    // Tengé Balance Badge
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(KazakhNavyDark)
-                            .border(1.5.dp, KazakhGold, RoundedCornerShape(16.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "₸",
-                                color = KazakhGold,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = formatTenge(userPlayer.tengeBalance),
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
+                Text("AZI", color = KazakhGoldLight, fontSize = 32.sp,
+                    letterSpacing = 7.sp, fontWeight = FontWeight.Black)
+                Text("КАРТОЧНЫЙ КЛУБ", color = Color(0xFF91A4C1), fontSize = 10.sp, letterSpacing = 2.sp)
+            }
+            OutlinedButton(onClick = { dialog = "name" }, shape = RoundedCornerShape(16.dp)) {
+                Text(user.avatarEmoji + "  " + user.name, maxLines = 1, color = Color.White,
+                    modifier = Modifier.width(130.dp))
+            }
+        }
+        Card(shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(containerColor = KazakhNavy),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF31415D))) {
+            Row(Modifier.fillMaxWidth().padding(22.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("ТВОЙ СТОЛ.\nТВОЯ ИГРА.", color = Color.White, fontSize = 25.sp,
+                        lineHeight = 30.sp, fontWeight = FontWeight.Bold)
+                    Text("Три карты. Один победитель.\nСобери друзей за столом.",
+                        color = Color(0xFFADC0D7), fontSize = 13.sp, lineHeight = 20.sp)
+                    Text("БАЛАНС  " + formatTenge(user.tengeBalance),
+                        color = KazakhGold, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                KazakhCardView(null, false, deck, cardWidth = 92.dp, elevation = 10.dp,
+                    modifier = Modifier.padding(start = 10.dp))
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Вместе интереснее", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("Стол по приглашению для 2–6 друзей", color = Color(0xFF91A4C1), fontSize = 14.sp)
+            Button(onClick = { dialog = "create" }, Modifier.fillMaxWidth().height(56.dp)
+                .testTag("create_room_button"), shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = KazakhGold)) {
+                Icon(Icons.Default.Group, null)
+                Spacer(Modifier.width(10.dp))
+                Text("Создать комнату", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(onClick = { dialog = "join" }, Modifier.fillMaxWidth().height(56.dp)
+                .testTag("join_room_button"), shape = RoundedCornerShape(18.dp)) {
+                Text("Войти по приглашению", color = KazakhGoldLight, fontSize = 16.sp)
+            }
+        }
+        Card(shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = KazakhNavy)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.SmartToy, null, tint = KazakhTurquoise)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Партия с ботами", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("Всего игроков за столом: ${bots + 1}", color = Color(0xFF91A4C1), fontSize = 13.sp)
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Profile Strip & Fast Utility Actions (Cards Deck, Leaderboard)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(KazakhNavyDark.copy(alpha = 0.85f))
-                        .border(1.dp, KazakhGold.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(KazakhTurquoise)
-                            .clickable { showProfileDialog = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(text = userPlayer.avatarEmoji, fontSize = 20.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (1..5).forEach { count ->
+                        androidx.compose.material3.FilterChip(selected = bots == count,
+                            onClick = { bots = count }, label = { Text("${count + 1}", modifier = Modifier.testTag("player_count_${count + 1}")) },
+                            modifier = Modifier.weight(1f))
                     }
-
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { showProfileDialog = true }
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = userPlayer.name,
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.AccountCircle,
-                                contentDescription = "Профиль",
-                                tint = KazakhGold,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        Text(
-                            text = "${userPlayer.ratingPoints} RP • Побед: ${userPlayer.handsWon} • Ази: ${userPlayer.aziCount}",
-                            color = Color(0xFFFFE082),
-                            fontSize = 10.sp
-                        )
-                    }
-
-                    // Profile Details Button
-                    IconButton(
-                        onClick = { showProfileDialog = true },
-                        modifier = Modifier.testTag("user_profile_open_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AccountCircle,
-                            contentDescription = "Профиль игрока",
-                            tint = KazakhGoldLight
-                        )
-                    }
-
-                    // Deck Customization Quick Button
-                    IconButton(
-                        onClick = { showDeckDialog = true },
-                        modifier = Modifier.testTag("custom_deck_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Palette,
-                            contentDescription = "Колода",
-                            tint = KazakhGold
-                        )
-                    }
-
-                    // Leaderboard Quick Button
-                    IconButton(
-                        onClick = { showLeaderboardSheet = true },
-                        modifier = Modifier.testTag("leaderboard_open_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.EmojiEvents,
-                            contentDescription = "Рейтинг",
-                            tint = KazakhGold
-                        )
-                    }
-
-                    // About Author Quick Button
-                    IconButton(
-                        onClick = { showAboutAuthorDialog = true },
-                        modifier = Modifier.testTag("about_author_open_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Об авторе",
-                            tint = KazakhGold
-                        )
-                    }
+                }
+                Button(onClick = { dialog = "suit" }, Modifier.fillMaxWidth().height(50.dp)
+                    .testTag("practice_button"), shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = KazakhTurquoise)) {
+                    Text("Быстрая партия", color = KazakhNavyDark, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Блок истории последних пяти матчей в профиле
-        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-            MatchHistorySection(
-                matchHistory = matchHistory
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Main Content: 2 Primary Modes
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // MODE 1: ОДИНОЧНАЯ ИГРА С БОТАМИ
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(8.dp, RoundedCornerShape(20.dp))
-                    .testTag("single_player_card"),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = KazakhNavy),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, KazakhGold)
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Brush.linearGradient(listOf(KazakhGold, KazakhGoldDark))),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SmartToy,
-                                contentDescription = "Боты",
-                                tint = KazakhNavyDark,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column {
-                            Text(
-                                text = "Одиночная игра с ботами",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                            Text(
-                                text = "Быстрый бой против умного ИИ",
-                                color = Color(0xFFB0BEC5),
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Text(
-                        text = "Выберите число ботов:",
-                        color = Color(0xFFECEFF1),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Selector for number of bots: 1 bot, 2 bots, 3 bots
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val botOptions = listOf(
-                            Triple(1, "1 бот", "Дуэль ⚔️"),
-                            Triple(2, "2 бота", "Втроем 👥"),
-                            Triple(3, "3 бота", "Вчетвером 👑")
-                        )
-
-                        botOptions.forEach { (count, title, sub) ->
-                            val isSelected = selectedBotCount == count
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isSelected) KazakhGold else KazakhNavyDark)
-                                    .border(
-                                        1.2.dp,
-                                        if (isSelected) KazakhGold else Color(0xFF455A64),
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { selectedBotCount = count }
-                                    .padding(vertical = 10.dp, horizontal = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        text = title,
-                                        color = if (isSelected) KazakhNavyDark else Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Black
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = sub,
-                                        color = if (isSelected) KazakhNavyDark.copy(alpha = 0.85f) else Color(0xFF90A4AE),
-                                        fontSize = 9.5.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Suit to exclude selection
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Убрать масть из колоды:",
-                            color = Color(0xFFECEFF1),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "3 масти (27 карт)",
-                            color = KazakhGold,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Suit.values().forEach { suit ->
-                            val isExcluded = excludedSuit == suit
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (isExcluded) Color(0xFFB71C1C).copy(alpha = 0.35f)
-                                        else KazakhNavyDark
-                                    )
-                                    .border(
-                                        width = if (isExcluded) 1.5.dp else 1.dp,
-                                        color = if (isExcluded) Color(0xFFEF5350) else Color(0xFF455A64),
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable { viewModel.setExcludedSuit(suit) }
-                                    .padding(vertical = 7.dp, horizontal = 2.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        text = suit.symbol,
-                                        color = if (suit.isRed) Color(0xFFE53935) else Color.White,
-                                        fontSize = 19.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = suit.ruName,
-                                        color = if (isExcluded) Color(0xFFFF8A80) else Color(0xFFCFD8DC),
-                                        fontSize = 9.5.sp,
-                                        fontWeight = if (isExcluded) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = if (isExcluded) "Убрана ❌" else "В игре ✓",
-                                        color = if (isExcluded) Color(0xFFFF5252) else Color(0xFF81C784),
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Button(
-                        onClick = {
-                            showSuitSelectDialog = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("start_bot_game_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = KazakhGold),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Играть",
-                            tint = KazakhNavyDark
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Играть (без ${excludedSuit.ruName})",
-                            color = KazakhNavyDark,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 14.sp
-                        )
-                    }
-                }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("Коллекция колод", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("12 рубашек · все доступны", color = Color(0xFF91A4C1), fontSize = 13.sp)
             }
-
-            // MODE 2: ИГРА ОНЛАЙН С ДРУЗЬЯМИ
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(8.dp, RoundedCornerShape(20.dp))
-                    .testTag("online_player_card"),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = KazakhNavy),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, KazakhTurquoise)
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Brush.linearGradient(listOf(KazakhTurquoise, KazakhTurquoiseDark))),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Group,
-                                contentDescription = "Друзья",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column {
-                            Text(
-                                text = "Игра онлайн с друзьями",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                            Text(
-                                text = "Приватные столы и голосовой чат",
-                                color = Color(0xFFB0BEC5),
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Create Room Button
-                        Button(
-                            onClick = { showCreateRoomDialog = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("create_room_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = KazakhTurquoise),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(imageVector = Icons.Default.Add, contentDescription = null, tint = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Создать",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
-
-                        // Join by Code Button
-                        OutlinedButton(
-                            onClick = { showJoinCodeDialog = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("join_code_button"),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KazakhGold),
-                            border = androidx.compose.foundation.BorderStroke(1.2.dp, KazakhGold),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                text = "Войти по коду",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
+            IconButton(onClick = { dialog = "decks" }) {
+                Icon(Icons.Default.Palette, "Все колоды", tint = KazakhGold)
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            decks.take(3).forEach { item ->
+                Column(Modifier.weight(1f).clickable { viewModel.selectDeck(item) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    KazakhCardView(null, false, item, cardWidth = 82.dp, isHighlighted = item.id == deck.id)
+                    Text(item.name.substringBefore(" •"), color = if(item.id == deck.id) KazakhGold else Color.White,
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(if(item.id == deck.id) "Выбрана" else "Выбрать", color = Color(0xFF91A4C1), fontSize = 11.sp)
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Creator Credit Footer (Clickable to open About Author)
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .clip(RoundedCornerShape(12.dp))
-                .background(KazakhNavyDark.copy(alpha = 0.75f))
-                .border(1.dp, KazakhGoldDark.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                .clickable { showAboutAuthorDialog = true }
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.creator_credit),
-                    color = KazakhGold,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.3.sp
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "ℹ️", fontSize = 11.sp)
-            }
+        if (history.isNotEmpty()) MatchHistorySection(matchHistory = history)
+        OutlinedButton(onClick = { dialog = "about" }, Modifier.fillMaxWidth()) {
+            Text("Об игре и авторе", color = Color(0xFF91A4C1))
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(Modifier.height(8.dp))
     }
-
-    // Dialogs & Sheets
-    if (showAboutAuthorDialog) {
-        AboutAuthorDialog(
-            onDismiss = { showAboutAuthorDialog = false },
-            onResetStats = { viewModel.resetPlayerStats() }
-        )
-    }
-
-    if (showDeckDialog) {
-        CustomDeckDialog(
-            availableDecks = availableDecks,
-            selectedDeck = selectedDeck,
-            onSelectDeck = {
-                viewModel.selectDeck(it)
-                showDeckDialog = false
-            },
-            onDismiss = { showDeckDialog = false }
-        )
-    }
-
-    if (showLeaderboardSheet) {
-        LeaderboardSheet(
-            currentUser = userPlayer,
-            leaderboardEntries = leaderboard,
-            onDismiss = { showLeaderboardSheet = false },
-            sheetState = leaderboardSheetState,
-            matchHistory = matchHistory,
-            onResetStats = { viewModel.resetPlayerStats() }
-        )
-    }
-
-    if (showProfileDialog) {
-        UserProfileDialog(
-            userPlayer = userPlayer,
-            matchHistory = matchHistory,
-            onDismiss = { showProfileDialog = false },
-            onEditName = {
-                showProfileDialog = false
-                showEditNameDialog = true
-            },
-            onResetStats = { viewModel.resetPlayerStats() }
-        )
-    }
-
-    if (showEditNameDialog) {
-        EditPlayerNameDialog(
-            currentName = userPlayer.name,
-            onDismiss = { showEditNameDialog = false },
-            onSave = { newName ->
-                viewModel.updateUserName(newName)
-                showEditNameDialog = false
-            }
-        )
-    }
-
-    if (showSuitSelectDialog) {
-        SelectSuitBeforeGameDialog(
-            currentExcludedSuit = excludedSuit,
-            onDismiss = { showSuitSelectDialog = false },
-            onConfirm = { chosenSuit ->
-                showSuitSelectDialog = false
-                viewModel.setExcludedSuit(chosenSuit)
-                viewModel.startSinglePlayerGame(selectedBotCount, chosenSuit)
-                onStartGame()
-            }
-        )
-    }
-
-    if (showCreateRoomDialog) {
-        CreateOnlineRoomDialog(
-            initialUserName = userPlayer.name,
-            initialExcludedSuit = excludedSuit,
-            onDismiss = { showCreateRoomDialog = false },
-            onCreate = { stake, code, maxPlayers, userName, chosenSuit ->
-                showCreateRoomDialog = false
-                viewModel.createOnlineWaitingRoom(stake, code, maxPlayers, userName, chosenSuit)
-                onStartGame()
-            }
-        )
-    }
-
-    if (showJoinCodeDialog) {
-        JoinOnlineRoomDialog(
-            initialUserName = userPlayer.name,
-            onDismiss = { showJoinCodeDialog = false },
-            onJoin = { code, userName ->
-                showJoinCodeDialog = false
-                viewModel.joinOnlineRoomByCode(code, userName)
-                onStartGame()
-            }
-        )
+    when(dialog) {
+        "decks" -> CustomDeckDialog(decks, deck, onSelectDeck = { viewModel.selectDeck(it) }, onDismiss = { dialog = "" })
+        "name" -> EditPlayerNameDialog(user.name, { dialog = "" }, { viewModel.updateUserName(it); dialog = "" })
+        "about" -> AboutAuthorDialog(onDismiss = { dialog = "" }, onResetStats = { viewModel.resetPlayerStats() })
+        "suit" -> SelectSuitBeforeGameDialog(excluded, { dialog = "" }) {
+            dialog = ""; viewModel.startSinglePlayerGame(bots, it); onStartGame()
+        }
+        "create" -> CreateOnlineRoomDialog(user.name, excluded, { dialog = "" }) { stake, code, max, name, suit ->
+            dialog = ""; viewModel.createOnlineWaitingRoom(stake, code, max, name, suit); onStartGame()
+        }
+        "join" -> JoinOnlineRoomDialog(user.name, { dialog = "" }) { code, name ->
+            dialog = ""; viewModel.joinOnlineRoomByCode(code, name); onStartGame()
+        }
     }
 }
 
@@ -813,7 +297,7 @@ fun CreateOnlineRoomDialog(
     var selectedStake by remember { mutableStateOf(StandardStakes.STAKE_500) }
     var selectedPlayersCount by remember { mutableIntStateOf(3) }
     var selectedExcludedSuit by remember { mutableStateOf(initialExcludedSuit) }
-    val generatedCode = remember { "AZI-${(100..999).random()}" }
+    val generatedCode = remember { com.example.network.RoomCode.generate() }
     var copiedCode by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -825,7 +309,7 @@ fun CreateOnlineRoomDialog(
                 .border(1.5.dp, KazakhTurquoise, RoundedCornerShape(20.dp))
                 .padding(20.dp)
         ) {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = "Создать комнату для друзей 👥",
                     color = Color.White,
@@ -912,11 +396,7 @@ fun CreateOnlineRoomDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(
-                        Pair(2, "2 игрока"),
-                        Pair(3, "3 игрока"),
-                        Pair(4, "4 игрока")
-                    ).forEach { (count, label) ->
+                    (2..6).map { it to it.toString() }.forEach { (count, label) ->
                         val isSelected = selectedPlayersCount == count
                         Box(
                             modifier = Modifier
@@ -1103,7 +583,7 @@ fun JoinOnlineRoomDialog(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = "Код комнаты от друга (например AZI-777):",
+                    text = "Код или приглашение от друга:",
                     color = Color(0xFFECEFF1),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
@@ -1111,8 +591,10 @@ fun JoinOnlineRoomDialog(
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
                     value = roomCodeInput,
-                    onValueChange = { roomCodeInput = it.uppercase() },
-                    placeholder = { Text("AZI-...", color = Color.Gray) },
+                    onValueChange = { roomCodeInput = it.take(160) },
+                    placeholder = { Text("AZI-XXXXXXXXXX", color = Color.Gray) },
+                    isError = roomCodeInput.isNotBlank() && com.example.network.RoomCode.normalize(roomCodeInput) == null,
+                    supportingText = { Text("Вставьте код из сообщения друга") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -1138,7 +620,7 @@ fun JoinOnlineRoomDialog(
                     }
                     Button(
                         onClick = {
-                            val code = if (roomCodeInput.isNotBlank()) roomCodeInput.trim() else "AZI-777"
+                            val code = com.example.network.RoomCode.normalize(roomCodeInput) ?: return@Button
                             val finalName = if (userNameInput.isNotBlank()) userNameInput.trim() else initialUserName
                             onJoin(code, finalName)
                         },
@@ -1146,7 +628,7 @@ fun JoinOnlineRoomDialog(
                         colors = ButtonDefaults.buttonColors(containerColor = KazakhGold),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Присоединиться", color = KazakhNavyDark, fontWeight = FontWeight.Bold)
+                        Text("Войти", color = KazakhNavyDark, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1232,7 +714,7 @@ fun SelectSuitBeforeGameDialog(
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = if (isExcluded) "Убрана из колоды (0 карт)" else "Остается в игре (9 карт: 6..Т)",
+                                            text = if (isExcluded) "Масть исключена" else "9 карт в колоде",
                                             color = if (isExcluded) Color(0xFFFF8A80) else Color(0xFF81C784),
                                             fontSize = 10.5.sp,
                                             fontWeight = FontWeight.Medium
@@ -1249,7 +731,7 @@ fun SelectSuitBeforeGameDialog(
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
                                     Text(
-                                        text = if (isExcluded) "❌ УБРАНА" else "✓ В ИГРЕ",
+                                        text = if (isExcluded) "Убрана" else "В игре",
                                         color = if (isExcluded) Color.White else Color(0xFF81C784),
                                         fontSize = 10.5.sp,
                                         fontWeight = FontWeight.Black

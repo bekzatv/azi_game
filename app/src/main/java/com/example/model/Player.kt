@@ -74,3 +74,4 @@ data class LeaderboardEntry(
     val avatarEmoji: String,
     val isCurrentUser: Boolean = false
 )
+

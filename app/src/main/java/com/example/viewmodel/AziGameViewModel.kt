@@ -36,19 +36,85 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class AziGameViewModel(application: Application) : AndroidViewModel(application) {
+class AziGameViewModel @JvmOverloads constructor(
+    application: Application,
+    relayUrl: String = "https://ntfy.sh",
+    private val deckFactory: (Suit) -> List<Card> = { AziEvaluator.createStandardAziDeck(excludedSuit = it).shuffled() }
+) : AndroidViewModel(application) {
 
     val voiceChatManager = VoiceChatManager(application.applicationContext)
-    val multiplayerManager = OnlineMultiplayerManager(viewModelScope)
+    val multiplayerManager = OnlineMultiplayerManager(viewModelScope, relayUrl)
     val networkStatus: StateFlow<NetworkConnectionStatus> = multiplayerManager.status
     private val _isRoomHost = MutableStateFlow(false)
     val isRoomHost: StateFlow<Boolean> = _isRoomHost.asStateFlow()
+
+    private val preferences = application.getSharedPreferences("azi_profile", 0)
+    private val _roomConfirmed = MutableStateFlow(false)
+    val roomConfirmed = _roomConfirmed.asStateFlow()
+    private val _roomError = MutableStateFlow<String?>(null)
+    val roomError = _roomError.asStateFlow()
+    private val _readyIds = MutableStateFlow<Set<String>>(emptySet())
+    val readyIds = _readyIds.asStateFlow()
+    private val bettingRound = com.example.model.BettingRound()
+    private fun activeBets() = _players.value.filter { !it.hasFolded }.associate { it.id to it.currentBet }
+
+    fun canStartTricksAfterUserCall(): Boolean =
+        _gamePhase.value == GamePhase.BETTING &&
+        _players.value.getOrNull(_currentTurnIndex.value)?.id == _userPlayer.value.id &&
+        bettingRound.canFinishWithCall(_userPlayer.value.id, activeBets(), _currentCallAmount.value)
+
+    private fun beginBetting() {
+        bettingRound.begin(_players.value.filter { !it.hasFolded }.map { it.id }, _currentCallAmount.value)
+        _gamePhase.value = GamePhase.BETTING
+    }
+
+    private var joinJob: Job? = null
+    private var dealJob: Job? = null
+    private var trickResultJob: Job? = null
+    private var roundRestartJob: Job? = null
+    private val deferredActions = ArrayDeque<OnlineGameEvent>()
+    private fun flushDeferredActions() {
+        val pending = deferredActions.toList()
+        deferredActions.clear()
+        pending.forEach { multiplayerManager.onEventReceived?.invoke(it) }
+    }
+
+    private fun cancelRoundJobs() {
+        deferredActions.clear()
+        dealJob?.cancel()
+        trickResultJob?.cancel()
+        roundRestartJob?.cancel()
+        botThinkingJob?.cancel()
+        turnTimerJob?.cancel()
+        _currentlyDealingCard.value = null
+    }
+    val networkError = multiplayerManager.errorMessage
+    val deliveryFailed = multiplayerManager.deliveryFailed
+
+    fun toggleReady() {
+        if (!_roomConfirmed.value || _gamePhase.value != GamePhase.WAITING_FOR_PLAYERS) return
+        val id = _userPlayer.value.id
+        val ready = id !in _readyIds.value
+        _readyIds.value = if (ready) _readyIds.value + id else _readyIds.value - id
+        multiplayerManager.broadcast("READY") { put("playerId", id); put("ready", ready) }
+    }
+
+    fun retryRoomConnection() {
+        val code = _roomCode.value ?: return
+        if (_gamePhase.value != GamePhase.WAITING_FOR_PLAYERS) return
+        _roomError.value = null
+        if (_isRoomHost.value) {
+            multiplayerManager.connectToRoom(code) { _roomConfirmed.value = true }
+        } else {
+            joinOnlineRoomByCode(code)
+        }
+    }
 
     // User Profile
     private val _userPlayer = MutableStateFlow(
         Player(
             id = "user_${multiplayerManager.localDeviceId}",
-            name = "Вы (Игрок)",
+            name = preferences.getString("name", "Игрок") ?: "Игрок",
             isUser = true,
             tengeBalance = 100000L,
             ratingPoints = 0,
@@ -77,7 +143,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     private val _availableDecks = MutableStateFlow(AvailableDecks.allDecks)
     val availableDecks: StateFlow<List<DeckTheme>> = _availableDecks.asStateFlow()
 
-    private val _selectedDeck = MutableStateFlow(AvailableDecks.ALTYN_ORDA)
+    private val _selectedDeck = MutableStateFlow(AvailableDecks.allDecks.find { it.id == preferences.getString("deck", "") } ?: AvailableDecks.SHANYRAK_NOIR)
     val selectedDeck: StateFlow<DeckTheme> = _selectedDeck.asStateFlow()
 
     // Room & Stakes
@@ -177,27 +243,50 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun setupMultiplayerEvents() {
-        multiplayerManager.onEventReceived = { event ->
+        multiplayerManager.onEventReceived = onEventReceived@ { event ->
             when (event) {
+                is OnlineGameEvent.RoomRejected -> {
+                    if (!_isRoomHost.value && event.playerId == _userPlayer.value.id) {
+                        joinJob?.cancel()
+                        _roomError.value = event.reason
+                        _roomConfirmed.value = false
+                    }
+                }
+                is OnlineGameEvent.ReadyChanged -> {
+                    if (_gamePhase.value == GamePhase.WAITING_FOR_PLAYERS && _players.value.any { it.id == event.playerId }) {
+                        _readyIds.value = if (event.ready) _readyIds.value + event.playerId else _readyIds.value - event.playerId
+                        if (_isRoomHost.value) syncRoomToNetwork()
+                    }
+                }
                 is OnlineGameEvent.PlayerJoined -> {
-                    if (_isOnlineMode.value) {
+                    if (_isOnlineMode.value && _isRoomHost.value) {
                         val incoming = event.player
                         val current = _players.value
-                        if (current.none { it.id == incoming.id }) {
-                            val updated = current + incoming.copy(isUser = false)
-                            _players.value = updated
-                            SoundManager.playChipBet()
-                            addSystemChatMessage("👋 ${incoming.name} вошёл в комнату по коду ${_roomCode.value}!")
-                            _lastActionText.value = "${incoming.name} подключился! (${updated.size}/${_maxRoomPlayers.value})"
-
-                            if (_isRoomHost.value) {
-                                syncRoomToNetwork()
+                        val reason = when {
+                            _gamePhase.value != GamePhase.WAITING_FOR_PLAYERS -> "Партия уже идёт. Дождитесь следующей."
+                            current.none { it.id == incoming.id } && current.size >= _maxRoomPlayers.value -> "Стол заполнен. Попросите друга создать новую комнату."
+                            else -> null
+                        }
+                        if (reason != null) {
+                            multiplayerManager.broadcast("ROOM_REJECTED") { put("playerId", incoming.id); put("reason", reason) }
+                        } else {
+                            if (current.none { it.id == incoming.id }) {
+                                _players.value = current + incoming.copy(isUser = false)
+                                addSystemChatMessage("${incoming.name} за столом")
                             }
+                            syncRoomToNetwork()
                         }
                     }
                 }
                 is OnlineGameEvent.SyncRoom -> {
-                    if (_isOnlineMode.value && !_isRoomHost.value) {
+                    if (_isOnlineMode.value && !_isRoomHost.value && _gamePhase.value == GamePhase.WAITING_FOR_PLAYERS) {
+                        if (event.players.none { it.id == _userPlayer.value.id }) return@onEventReceived
+                        joinJob?.cancel()
+                        _roomConfirmed.value = true
+                        _roomError.value = null
+                        _maxRoomPlayers.value = event.maxPlayers
+                        _excludedSuit.value = event.excludedSuit
+                        _readyIds.value = event.readyIds
                         val matchedStake = StandardStakes.allStakes.find { it.id == event.stakeId }
                         if (matchedStake != null) {
                             _currentStake.value = matchedStake
@@ -228,12 +317,16 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 }
                 is OnlineGameEvent.BetAction -> {
                     if (_isOnlineMode.value) {
-                        handleRemoteBetAction(event.playerId, event.actionType, event.amount)
+                        if (_gamePhase.value in listOf(GamePhase.DEALING, GamePhase.TRICK_RESULT)) {
+                            if (deferredActions.size < 16) deferredActions.addLast(event)
+                        } else handleRemoteBetAction(event.playerId, event.actionType, event.amount)
                     }
                 }
                 is OnlineGameEvent.CardPlayed -> {
                     if (_isOnlineMode.value) {
-                        handleRemoteCardPlayed(event.playerId, event.card)
+                        if (_gamePhase.value in listOf(GamePhase.DEALING, GamePhase.TRICK_RESULT)) {
+                            if (deferredActions.size < 16) deferredActions.addLast(event)
+                        } else handleRemoteCardPlayed(event.playerId, event.card)
                     }
                 }
                 is OnlineGameEvent.ChatReceived -> {
@@ -247,8 +340,23 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 is OnlineGameEvent.PlayerLeft -> {
                     val left = _players.value.find { it.id == event.playerId }
                     if (left != null) {
+                        val hostLeft = _players.value.firstOrNull()?.id == event.playerId
                         addSystemChatMessage("👋 ${left.name} вышел из комнаты")
+                        cancelRoundJobs()
+                        // A changed seat order invalidates turn indexes. Abort, never continue a partial round.
                         _players.value = _players.value.filter { it.id != event.playerId }
+                            .map { it.copy(cards = emptyList(), hasFolded = false, currentBet = 0, tricksWonCount = 0) }
+                        _readyIds.value = if (_isRoomHost.value) setOf(_userPlayer.value.id) else emptySet()
+                        _potTenge.value = 0
+                        _isSvara.value = false
+                        _playedCardsInTrick.value = emptyList()
+                        _gamePhase.value = GamePhase.WAITING_FOR_PLAYERS
+                        _lastActionText.value = "Игрок вышел. Соберите участников для новой партии."
+                        if (hostLeft) {
+                            _roomConfirmed.value = false
+                            _roomError.value = "Создатель закрыл комнату. Вернитесь в лобби и создайте новую."
+                            multiplayerManager.disconnect()
+                        } else if (_isRoomHost.value) syncRoomToNetwork()
                     }
                 }
             }
@@ -258,6 +366,9 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     private fun syncRoomToNetwork() {
         multiplayerManager.broadcast("SYNC_ROOM") {
             put("stakeId", _currentStake.value.id)
+            put("maxPlayers", _maxRoomPlayers.value)
+            put("excludedSuit", _excludedSuit.value.name)
+            put("readyIds", JSONArray(_readyIds.value.toList()))
             val arr = JSONArray()
             _players.value.forEach { p ->
                 arr.put(multiplayerManager.playerToJson(p))
@@ -266,15 +377,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun initLobbyTables() {
-        _onlineTables.value = listOf(
-            OnlineTableInfo("room_1", "Астана - Быстрый стол", StandardStakes.STAKE_500, 2, 3, roomCode = "AZI-101"),
-            OnlineTableInfo("room_2", "Алматы - Ханский стол", StandardStakes.STAKE_2000, 3, 3, roomCode = "AZI-202"),
-            OnlineTableInfo("room_3", "Шымкент - Арена Батыров", StandardStakes.STAKE_10000, 1, 3, roomCode = "AZI-303"),
-            OnlineTableInfo("room_4", "Актау - Каспийский Бриз", StandardStakes.STAKE_500, 2, 3, roomCode = "AZI-404"),
-            OnlineTableInfo("room_5", "Туркестан - VIP Золотая Орда", StandardStakes.STAKE_10000, 2, 3, roomCode = "AZI-505")
-        )
-    }
+    private fun initLobbyTables() { _onlineTables.value = emptyList() }
 
     private fun initLeaderboard() {
         val user = _userPlayer.value
@@ -293,6 +396,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateUserName(newName: String) {
+        if (newName.isNotBlank()) preferences.edit().putString("name", newName.trim().take(20)).apply()
         val trimmed = newName.trim().take(20)
         if (trimmed.isEmpty()) return
         _userPlayer.value = _userPlayer.value.copy(name = trimmed)
@@ -322,12 +426,15 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun startSinglePlayerGame(botCount: Int, excludedSuit: Suit = _excludedSuit.value) {
+        cancelRoundJobs()
+        multiplayerManager.disconnect()
+        _isSvara.value = false
         _excludedSuit.value = excludedSuit
         startNewGame(
             stake = StandardStakes.STAKE_500,
             online = false,
             customCode = null,
-            botCount = botCount.coerceIn(1, 3),
+            botCount = botCount.coerceIn(1, 5),
             excludedSuit = excludedSuit
         )
     }
@@ -339,6 +446,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         userName: String? = null,
         excludedSuit: Suit = _excludedSuit.value
     ) {
+        cancelRoundJobs()
         _excludedSuit.value = excludedSuit
         if (!userName.isNullOrBlank()) {
             updateUserName(userName)
@@ -347,7 +455,11 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         _isOnlineMode.value = true
         _isRoomHost.value = true
         _roomCode.value = roomCode
-        _maxRoomPlayers.value = maxPlayers.coerceIn(2, 4)
+        joinJob?.cancel()
+        _roomError.value = null
+        _roomConfirmed.value = false
+        _readyIds.value = setOf(_userPlayer.value.id)
+        _maxRoomPlayers.value = maxPlayers.coerceIn(2, 6)
         botThinkingJob?.cancel()
         turnTimerJob?.cancel()
 
@@ -371,12 +483,20 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         addSystemChatMessage("Комната $roomCode создана. Скопируйте код и отправьте друзьям!")
 
         multiplayerManager.connectToRoom(roomCode) {
+            _roomConfirmed.value = true
             addSystemChatMessage("🟢 Подключено к сети! Код: $roomCode")
         }
     }
 
     fun joinOnlineRoomByCode(code: String, userName: String? = null) {
-        val formattedCode = code.trim().uppercase()
+        val formattedCode = com.example.network.RoomCode.normalize(code) ?: return
+        cancelRoundJobs()
+        _isSvara.value = false
+        _potTenge.value = 0L
+        joinJob?.cancel()
+        _roomConfirmed.value = false
+        _roomError.value = null
+        _readyIds.value = emptySet()
         if (!userName.isNullOrBlank()) {
             updateUserName(userName)
         }
@@ -401,16 +521,23 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         _gamePhase.value = GamePhase.WAITING_FOR_PLAYERS
         _lastActionText.value = "Подключение к комнате $formattedCode через интернет..."
 
-        multiplayerManager.connectToRoom(formattedCode) {
-            multiplayerManager.broadcast("PLAYER_JOIN") {
-                put("player", multiplayerManager.playerToJson(currentUser))
+        multiplayerManager.connectToRoom(formattedCode)
+        joinJob = viewModelScope.launch {
+            repeat(6) {
+                if (_roomConfirmed.value || _roomError.value != null) return@launch
+                if (networkStatus.value == NetworkConnectionStatus.CONNECTED) {
+                    multiplayerManager.broadcast("PLAYER_JOIN") {
+                        put("player", multiplayerManager.playerToJson(currentUser))
+                    }
+                }
+                delay(4000)
             }
-            _lastActionText.value = "🟢 Подключено! Ожидание ответа создателя..."
-            addSystemChatMessage("🟢 Подключено к комнате $formattedCode. Синхронизация...")
+            if (!_roomConfirmed.value) _roomError.value = "Хозяин не ответил. Проверьте код и попросите друга открыть комнату."
         }
     }
 
     fun addFriendToWaitingRoom(friendName: String? = null) {
+        if (_isOnlineMode.value) return // Online participants must be connected devices.
         if (_players.value.size >= _maxRoomPlayers.value) return
         val namesPool = listOf("Арман", "Алихан", "Дана", "Марат", "Жанна", "Диас", "Айбек")
         val chosenName = friendName?.trim()?.takeIf { it.isNotBlank() } ?: "Друг (${namesPool.random()})"
@@ -450,16 +577,22 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 stake = _currentStake.value,
                 online = false,
                 customCode = null,
-                botCount = (_players.value.size - 1).coerceIn(1, 3)
+                botCount = (_players.value.size - 1).coerceIn(1, 5)
             )
         }
     }
 
     fun startOnlineGameFromWaitingRoom() {
-        if (_players.value.isEmpty()) return
+        if (!_isRoomHost.value || !_roomConfirmed.value || networkStatus.value != NetworkConnectionStatus.CONNECTED || deliveryFailed.value) return
+        if (_players.value.size < 2) return
+        if (_gamePhase.value == GamePhase.WAITING_FOR_PLAYERS && !_players.value.all { it.id in _readyIds.value }) return
+        if (_gamePhase.value !in listOf(GamePhase.WAITING_FOR_PLAYERS, GamePhase.WINNER_CELEBRATION, GamePhase.SVARA)) return
+        cancelRoundJobs()
         val stake = _currentStake.value
         val ante = stake.anteTenge
-        var pot = 0L
+        var pot = if (_isSvara.value) _potTenge.value else 0L
+        _isSvara.value = false
+        _winnerPlayer.value = null
 
         val updatedWithAnte = _players.value.map { p ->
             val newBal = (p.tengeBalance - ante).coerceAtLeast(0L)
@@ -483,7 +616,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         _lastActionText.value = "Все игроки готовы! Раздача карт..."
         _gamePhase.value = GamePhase.DEALING
 
-        val fullDeck = AziEvaluator.createStandardAziDeck(excludedSuit = _excludedSuit.value).shuffled()
+        val fullDeck = deckFactory(_excludedSuit.value)
         val nPlayers = updatedWithAnte.size.coerceAtLeast(2)
         val trump = fullDeck[nPlayers * 3]
         _trumpCard.value = trump
@@ -520,6 +653,11 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun applyRemoteGameStarted(event: OnlineGameEvent.GameStarted) {
+        if (!_roomConfirmed.value || event.hands.keys != _players.value.map { it.id }.toSet()) return
+        if (event.hands.values.any { it.size != 3 } || event.turnIndex !in _players.value.indices) return
+        cancelRoundJobs()
+        _isSvara.value = false
+        _winnerPlayer.value = null
         val trump = event.trumpCard
         _trumpCard.value = trump
         _trumpSuit.value = trump.suit
@@ -553,7 +691,8 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         trump: Card,
         startingTurnIndex: Int = 0
     ) {
-        viewModelScope.launch {
+        dealJob?.cancel()
+        dealJob = viewModelScope.launch {
             _dealingProgress.value = 0f
             _currentlyDealingCard.value = null
             val currentList = _players.value
@@ -585,7 +724,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             _dealingProgress.value = 1f
             delay(200)
 
-            _gamePhase.value = GamePhase.BETTING
+            beginBetting()
             _currentTurnIndex.value = startingTurnIndex
 
             val userCards = _players.value.firstOrNull { it.isUser }?.cards ?: emptyList()
@@ -603,10 +742,13 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             }
 
             startTurnTimer()
+            flushDeferredActions()
         }
     }
 
     private fun handleRemoteBetAction(playerId: String, actionStr: String, raiseAmount: Long) {
+        if (_gamePhase.value != GamePhase.BETTING || _players.value.getOrNull(_currentTurnIndex.value)?.id != playerId) return
+        if (actionStr == "RAISE" && raiseAmount !in _currentStake.value.minBetTenge.._currentStake.value.maxBetTenge) return
         val player = _players.value.find { it.id == playerId } ?: return
         if (player.isUser) return
 
@@ -644,20 +786,15 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 SoundManager.playChipBet()
                 advanceTurn()
             }
-            BetActionType.SHOWDOWN -> {
-                val callDiff = (_currentCallAmount.value - player.currentBet).coerceAtLeast(0L)
-                val newBal = (player.tengeBalance - callDiff).coerceAtLeast(0L)
-                _potTenge.value += callDiff
-                _players.value = _players.value.map {
-                    if (it.id == playerId) it.copy(tengeBalance = newBal, currentBet = _currentCallAmount.value) else it
-                }
-                _lastActionText.value = "${player.name} вскрывает торговлю!"
-                startTricksPhase()
-            }
+            // Legacy event is just a call, never a shortcut past other players.
+            BetActionType.SHOWDOWN -> handleRemoteBetAction(playerId, BetActionType.CALL.name, 0L)
         }
     }
 
     private fun handleRemoteCardPlayed(playerId: String, card: Card) {
+        if (_gamePhase.value != GamePhase.PLAYING_TRICKS || _players.value.getOrNull(_currentTurnIndex.value)?.id != playerId) return
+        val hand = _players.value.find { it.id == playerId }?.cards ?: return
+        if (hand.none { it.id == card.id } || !AziEvaluator.isValidMove(card, hand, _playedCardsInTrick.value.firstOrNull()?.card?.suit)) return
         val player = _players.value.find { it.id == playerId } ?: return
         if (player.isUser) return
 
@@ -681,6 +818,10 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun leaveCurrentGame() {
+        cancelRoundJobs()
+        joinJob?.cancel()
+        _roomConfirmed.value = false
+        _readyIds.value = emptySet()
         if (_isOnlineMode.value) {
             multiplayerManager.broadcast("PLAYER_LEFT") {
                 put("playerId", _userPlayer.value.id)
@@ -744,7 +885,13 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             )
         )
 
-        val activeBots = botsPool.take(botCount.coerceIn(1, 3))
+        val extendedBots = botsPool + listOf(
+            Player(id = "bot_4", name = "Данияр", isUser = false, tengeBalance = 55000L,
+                avatarEmoji = "🐺", avatarBgColor = 0xFF475569),
+            Player(id = "bot_5", name = "Аружан", isUser = false, tengeBalance = 55000L,
+                avatarEmoji = "🦊", avatarBgColor = 0xFF9A5D40)
+        )
+        val activeBots = extendedBots.take(botCount.coerceIn(1, 5))
         val activeList = listOf(_userPlayer.value.copy(tricksWonCount = 0)) + activeBots
         _players.value = activeList
         _winnerPlayer.value = null
@@ -778,10 +925,11 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun dealCards() {
-        viewModelScope.launch {
+        dealJob?.cancel()
+        dealJob = viewModelScope.launch {
             _dealingProgress.value = 0f
             _currentlyDealingCard.value = null
-            val fullDeck = AziEvaluator.createStandardAziDeck(excludedSuit = _excludedSuit.value).shuffled()
+            val fullDeck = deckFactory(_excludedSuit.value)
             val currentList = _players.value
             val nPlayers = currentList.size.coerceAtLeast(2)
 
@@ -827,7 +975,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             _lastActionText.value = "Козырь открыт: ${trump.suit.symbol} ${trump.suit.ruName} (${trump.rank.ruTitle})"
             delay(500)
 
-            _gamePhase.value = GamePhase.BETTING
+            beginBetting()
             _currentTurnIndex.value = 0 // User goes first
 
             val userCards = _players.value.firstOrNull { it.isUser }?.cards ?: emptyList()
@@ -855,11 +1003,13 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onUserAction(action: BetActionType, raiseAmountTenge: Long = _currentStake.value.minBetTenge) {
+        if (_isOnlineMode.value && (networkStatus.value != NetworkConnectionStatus.CONNECTED || deliveryFailed.value)) return
         if (_gamePhase.value != GamePhase.BETTING) return
         val currentPlayers = _players.value
         val user = currentPlayers.firstOrNull { it.isUser } ?: return
         if (currentPlayers.getOrNull(_currentTurnIndex.value)?.id != user.id) return
 
+        if (action == BetActionType.SHOWDOWN && !canStartTricksAfterUserCall()) return
         turnTimerJob?.cancel()
 
         when (action) {
@@ -919,21 +1069,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 advanceTurn()
             }
             BetActionType.SHOWDOWN -> {
-                val callDiff = (_currentCallAmount.value - user.currentBet).coerceAtLeast(0L)
-                val newBal = (user.tengeBalance - callDiff).coerceAtLeast(0L)
-                _potTenge.value += callDiff
-                val updated = currentPlayers.map {
-                    if (it.id == user.id) it.copy(tengeBalance = newBal, currentBet = _currentCallAmount.value) else it
-                }
-                _players.value = updated
-                if (_isOnlineMode.value) {
-                    multiplayerManager.broadcast("BET_ACTION") {
-                        put("playerId", user.id)
-                        put("action", BetActionType.SHOWDOWN.name)
-                        put("amount", 0L)
-                    }
-                }
-                startTricksPhase()
+                if (canStartTricksAfterUserCall()) onUserAction(BetActionType.CALL)
             }
         }
     }
@@ -945,15 +1081,15 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        // Check if all active players matched currentCallAmount
-        val allMatched = activePlayers.all { it.currentBet == _currentCallAmount.value }
-        if (allMatched && _currentTurnIndex.value == _players.value.lastIndex) {
+        val actorId = _players.value.getOrNull(_currentTurnIndex.value)?.id ?: return
+        bettingRound.record(actorId, _currentCallAmount.value, activePlayers.map { it.id }.toSet())
+        if (bettingRound.complete(activeBets(), _currentCallAmount.value)) {
             startTricksPhase()
             return
         }
 
         var nextIndex = (_currentTurnIndex.value + 1) % _players.value.size
-        while (_players.value[nextIndex].hasFolded) {
+        while (_players.value[nextIndex].hasFolded || !bettingRound.needsResponse(_players.value[nextIndex].id)) {
             nextIndex = (nextIndex + 1) % _players.value.size
         }
 
@@ -967,6 +1103,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun handleBotTurn(bot: Player) {
+        if (_isOnlineMode.value) return
         botThinkingJob?.cancel()
         botThinkingJob = viewModelScope.launch {
             delay(1000)
@@ -1052,6 +1189,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     // ==========================================
 
     private fun startTricksPhase() {
+        if (_gamePhase.value != GamePhase.BETTING || !bettingRound.complete(activeBets(), _currentCallAmount.value)) return
         turnTimerJob?.cancel()
         _gamePhase.value = GamePhase.PLAYING_TRICKS
         _currentTrick.value = 1
@@ -1063,6 +1201,8 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         while (firstActiveIndex < _players.value.size && _players.value[firstActiveIndex].hasFolded) {
             firstActiveIndex++
         }
+        val winnerOfBetting = _players.value.indexOfFirst { it.id == bettingRound.lastRaiserId && !it.hasFolded }
+        if (winnerOfBetting >= 0) firstActiveIndex = winnerOfBetting
         _currentTurnIndex.value = firstActiveIndex
 
         _lastActionText.value = "Розыгрыш 3-х взяток! Козырь: ${_trumpSuit.value?.symbol} ${_trumpSuit.value?.ruName}"
@@ -1071,14 +1211,16 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         startTrickTurnTimer()
 
         val activePlayer = _players.value.getOrNull(firstActiveIndex)
-        if (activePlayer != null && !activePlayer.isUser) {
+        if (activePlayer != null && !activePlayer.isUser && !_isOnlineMode.value) {
             handleBotTrickTurn(activePlayer)
         }
     }
 
     fun playUserCard(card: Card) {
+        if (_isOnlineMode.value && (networkStatus.value != NetworkConnectionStatus.CONNECTED || deliveryFailed.value)) return
         if (_gamePhase.value != GamePhase.PLAYING_TRICKS) return
         val user = _players.value.firstOrNull { it.isUser } ?: return
+        if (user.cards.none { it.id == card.id }) return
         if (_players.value.getOrNull(_currentTurnIndex.value)?.id != user.id) return
 
         val leadSuit = _playedCardsInTrick.value.firstOrNull()?.card?.suit
@@ -1112,6 +1254,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun handleBotTrickTurn(bot: Player) {
+        if (_isOnlineMode.value) return
         botThinkingJob?.cancel()
         botThinkingJob = viewModelScope.launch {
             delay(1000)
@@ -1198,7 +1341,8 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         turnTimerJob?.cancel()
         _gamePhase.value = GamePhase.TRICK_RESULT
 
-        viewModelScope.launch {
+        trickResultJob?.cancel()
+        trickResultJob = viewModelScope.launch {
             val winningPlay = AziEvaluator.determineTrickWinner(_playedCardsInTrick.value, _trumpSuit.value)
             val trickNum = _currentTrick.value
 
@@ -1227,6 +1371,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
                 _lastActionText.value = "Взятка №${_currentTrick.value} из 3. Ходит ${winningPlay.playerName}"
 
                 startTrickTurnTimer()
+                flushDeferredActions()
 
                 val nextPlayer = _players.value.getOrNull(_currentTurnIndex.value)
                 if (nextPlayer != null && !nextPlayer.isUser && (!_isOnlineMode.value || nextPlayer.id.startsWith("bot_"))) {
@@ -1247,7 +1392,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         if (contenders.size == 1 && maxTricks >= 2) {
             // Decisive winner (2 or 3 tricks taken = Azi!)
             val winner = contenders.first()
-            declareWinner(winner, reason = "Взял ${winner.tricksWonCount} из 3 взяток (АЗИ)!")
+            declareWinner(winner, reason = "Взял ${winner.tricksWonCount} из 3 взяток!")
         } else if (contenders.size == 1 && nonFolded.size == 2 && maxTricks == 2) {
             val winner = contenders.first()
             declareWinner(winner, reason = "Взял ${winner.tricksWonCount} взятки!")
@@ -1255,13 +1400,17 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
             // Tie (1:1:1 or split tricks) -> SVARA!
             _isSvara.value = true
             _gamePhase.value = GamePhase.SVARA
-            _lastActionText.value = "⚡ СВАРА! Ничья по взяткам (1:1:1). Банк остается на кону!"
+            _lastActionText.value = "АЗИ! Трое взяли по одной взятке. Банк остаётся на кону!"
             SoundManager.playSvaraGong()
-            addSystemChatMessage("⚡ СВАРА! Ни один игрок не взял 2 взятки. Банк переходит в следующий раунд!")
+            addSystemChatMessage("АЗИ! По одной взятке у трёх игроков. Банк переходит в следующий розыгрыш!")
 
-            viewModelScope.launch {
+            roundRestartJob?.cancel()
+            roundRestartJob = viewModelScope.launch {
                 delay(3200)
-                startNewGame(_currentStake.value, _isOnlineMode.value, _roomCode.value)
+                if (_isOnlineMode.value) {
+                    if (_isRoomHost.value) startOnlineGameFromWaitingRoom()
+                } else startNewGame(_currentStake.value, false, _roomCode.value,
+                    botCount = (_players.value.size - 1).coerceIn(1, 5))
             }
         }
     }
@@ -1445,6 +1594,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     // Deck Selection (Free customization)
     fun selectDeck(deck: DeckTheme) {
         _selectedDeck.value = deck
+        preferences.edit().putString("deck", deck.id).apply()
     }
 
     fun buyDeck(deck: DeckTheme) {
@@ -1452,6 +1602,7 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
     }
 
     override fun onCleared() {
+        joinJob?.cancel()
         super.onCleared()
         multiplayerManager.disconnect()
         voiceChatManager.cleanup()
@@ -1459,4 +1610,3 @@ class AziGameViewModel(application: Application) : AndroidViewModel(application)
         botThinkingJob?.cancel()
     }
 }
-
